@@ -141,4 +141,40 @@ func TestDiscoveryWebcamNaming(t *testing.T) {
 		// Verify d2 (Empty name, driver index 2)
 		test.That(t, resp[4].Name, test.ShouldEqual, "webcam-2")
 	})
+
+	t.Run("Identical names are disambiguated by driver index", func(t *testing.T) {
+		getDrivers := func() []driver.Driver {
+			// Identical camera models report the same name, e.g. two "USB Camera"s on macOS/Windows,
+			// or two capture nodes of one device on Linux.
+			// Driver 0: "USB Camera", 1 property -> USBCamera-0
+			d0 := newFakeDriver("label0", "USB Camera", []prop.Media{
+				{Video: prop.Video{Width: 640}},
+			})
+			// Driver 1: unique name, 1 property -> OtherCam (unchanged)
+			d1 := newFakeDriver("label1", "Other Cam", []prop.Media{
+				{Video: prop.Video{Width: 640}},
+			})
+			// Driver 2: "USB Camera", 2 properties -> USBCamera-2-0, USBCamera-2-1
+			d2 := newFakeDriver("label2", "USB Camera", []prop.Media{
+				{Video: prop.Video{Width: 640}},
+				{Video: prop.Video{Width: 1280}},
+			})
+			// Driver 3: "USB Camera", 1 property -> USBCamera-3
+			d3 := newFakeDriver("label3", "USB Camera", []prop.Media{
+				{Video: prop.Video{Width: 640}},
+			})
+			return []driver.Driver{d0, d1, d2, d3}
+		}
+
+		resp, err := findCameras(context.Background(), getDrivers, logger)
+		test.That(t, err, test.ShouldBeNil)
+
+		names := make([]string, 0, len(resp))
+		for _, config := range resp {
+			names = append(names, config.Name)
+		}
+		test.That(t, names, test.ShouldResemble, []string{
+			"USBCamera-0", "OtherCam", "USBCamera-2-0", "USBCamera-2-1", "USBCamera-3",
+		})
+	})
 }

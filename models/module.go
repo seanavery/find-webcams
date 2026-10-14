@@ -96,7 +96,14 @@ func findCameras(ctx context.Context, getDrivers func() []driver.Driver, logger 
 		// So we can call Initialize() only once, and call discover() as many times as we need.
 		mdcam.Initialize()
 	}
-	webcams := []resource.Config{}
+	// discoveredCam is a driver that passed the skip checks below.
+	type discoveredCam struct {
+		index     int
+		info      driver.Info
+		videoPath string
+		props     []prop.Media
+	}
+	var cams []discoveredCam
 
 	drivers := getDrivers()
 	for i, d := range drivers {
@@ -136,13 +143,36 @@ func findCameras(ctx context.Context, getDrivers func() []driver.Driver, logger 
 		logger.Debugf("found camera drivers with info  %#v", driverInfo)
 		logger.Debugf("found %d properties for driver %s", len(props), driverInfo.Name)
 
+		cams = append(cams, discoveredCam{index: i, info: driverInfo, videoPath: videoPath, props: props})
+	}
+
+	// Identical camera models report the same name, e.g. two "USB Camera"s on macOS/Windows, or
+	// multiple capture nodes of one device on Linux. Count names only across drivers that passed
+	// the skip checks, so a skipped sibling (like a Linux metadata node) doesn't cause a rename.
+	nameCounts := map[string]int{}
+	for _, cam := range cams {
+		nameCounts[fixName(cam.info.Name)]++
+	}
+
+	webcams := []resource.Config{}
+	for _, cam := range cams {
+		baseName := fixName(cam.info.Name)
+		if baseName == "" {
+			// Temporary fix as names are empty on windows
+			// Related issue: https://github.com/pion/mediadevices/issues/95
+			baseName = fmt.Sprintf("webcam-%d", cam.index)
+		} else if nameCounts[baseName] > 1 {
+			// Disambiguate identical names by driver index, the same way unnamed drivers are.
+			baseName = fmt.Sprintf("%s-%d", baseName, cam.index)
+		}
+
 		// Create a webcam resource config for every property option
-		for j, p := range props {
+		for j, p := range cam.props {
 			logger.Debugf("property %d: %dx%d @ %dfps, format: %s",
 				j, p.Video.Width, p.Video.Height, p.Video.FrameRate, p.Video.FrameFormat)
 			var result map[string]interface{}
 			attributes := videosource.WebcamConfig{
-				Path:      videoPath,
+				Path:      cam.videoPath,
 				Format:    string(p.Video.FrameFormat),
 				Width:     p.Video.Width,
 				Height:    p.Video.Height,
@@ -158,14 +188,8 @@ func findCameras(ctx context.Context, getDrivers func() []driver.Driver, logger 
 			}
 
 			// Create unique name for each property option
-			name := fixName(driverInfo.Name)
-			if name == "" {
-				// Temporary fix as names are empty on windows
-				// Related issue: https://github.com/pion/mediadevices/issues/95
-				name = fmt.Sprintf("webcam-%d", i)
-			}
-
-			if len(props) > 1 {
+			name := baseName
+			if len(cam.props) > 1 {
 				name = name + "-" + fmt.Sprintf("%d", j)
 			}
 
