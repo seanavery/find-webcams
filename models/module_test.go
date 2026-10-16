@@ -119,7 +119,7 @@ func TestDiscoveryWebcamNaming(t *testing.T) {
 				{Video: prop.Video{Width: 640}},
 				{Video: prop.Video{Width: 1280}},
 			})
-			// Driver 2: Empty name, 1 property -> webcam-2
+			// Driver 2: Empty name, 1 property -> webcam-1 (second unnamed camera)
 			d2 := newFakeDriver("label2", "", []prop.Media{
 				{Video: prop.Video{Width: 640}},
 			})
@@ -130,15 +130,48 @@ func TestDiscoveryWebcamNaming(t *testing.T) {
 		test.That(t, err, test.ShouldBeNil)
 		test.That(t, resp, test.ShouldHaveLength, 5)
 
-		// Verify d0 (Empty name, driver index 0)
+		// Verify d0 (first unnamed camera)
 		test.That(t, resp[0].Name, test.ShouldEqual, "webcam-0-0")
 		test.That(t, resp[1].Name, test.ShouldEqual, "webcam-0-1")
 
-		// Verify d1 (Valid name "cam", driver index 1 - index not used for valid names)
+		// Verify d1 (unique name "cam", so no camera number)
 		test.That(t, resp[2].Name, test.ShouldEqual, "cam-0")
 		test.That(t, resp[3].Name, test.ShouldEqual, "cam-1")
 
-		// Verify d2 (Empty name, driver index 2)
-		test.That(t, resp[4].Name, test.ShouldEqual, "webcam-2")
+		// Verify d2 (second unnamed camera)
+		test.That(t, resp[4].Name, test.ShouldEqual, "webcam-1")
+	})
+
+	t.Run("Identical names are numbered in label order", func(t *testing.T) {
+		// Identical camera models report the same name, e.g. two "USB Camera"s on macOS/Windows,
+		// or two capture nodes of one device on Linux.
+		usb0 := newFakeDriver("label0", "USB Camera", []prop.Media{{Video: prop.Video{Width: 640}}})
+		other := newFakeDriver("label1", "Other Cam", []prop.Media{{Video: prop.Video{Width: 640}}})
+		usb1 := newFakeDriver("label2", "USB Camera", []prop.Media{
+			{Video: prop.Video{Width: 640}},
+			{Video: prop.Video{Width: 1280}},
+		})
+		usb2 := newFakeDriver("label3", "USB Camera", []prop.Media{{Video: prop.Video{Width: 640}}})
+		// A camera named "web cam" shares its fixed name with unnamed cameras.
+		webcam := newFakeDriver("label4", "web cam", []prop.Media{{Video: prop.Video{Width: 640}}})
+		unnamed := newFakeDriver("label5", "", []prop.Media{{Video: prop.Video{Width: 640}}})
+
+		// The driver manager returns drivers in map order, so the same cameras must get the same
+		// names whatever order they arrive in.
+		for _, drivers := range [][]driver.Driver{
+			{usb0, other, usb1, usb2, webcam, unnamed},
+			{unnamed, usb2, webcam, other, usb1, usb0},
+		} {
+			resp, err := findCameras(context.Background(), func() []driver.Driver { return drivers }, logger)
+			test.That(t, err, test.ShouldBeNil)
+
+			names := make([]string, 0, len(resp))
+			for _, config := range resp {
+				names = append(names, config.Name)
+			}
+			test.That(t, names, test.ShouldResemble, []string{
+				"USBCamera-0", "OtherCam", "USBCamera-1-0", "USBCamera-1-1", "USBCamera-2", "webcam-0", "webcam-1",
+			})
+		}
 	})
 }
